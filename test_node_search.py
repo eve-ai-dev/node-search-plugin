@@ -25,7 +25,7 @@ title: Beta
 ---
 Back to [[A#Intro]].""")
 
-    result = node_search(scope=None, query="alpha", tags=["ai"], root=root, cache_path=cache, include=["frontmatter", "outgoing_links", "incoming_links", "headings"])
+    result = node_search(scope=None, query="alpha", tags=["ai"], root=root, cache_path=cache, output_mode="full", include=["frontmatter", "outgoing_links", "incoming_links", "headings"])
 
     assert result["success"] is True
     assert result["count"] == 1
@@ -46,7 +46,7 @@ foo: [
 ---
 Body""")
 
-    result = node_search(query="bad", root=root, cache_path=cache, include=["frontmatter"])
+    result = node_search(query="bad", root=root, cache_path=cache, output_mode="full", include=["frontmatter"])
 
     assert result["count"] == 1
     item = result["results"][0]
@@ -61,7 +61,7 @@ def test_ambiguous_basename_link_is_explicit(tmp_path):
     write(root / "two" / "Target.md", "# Two")
     write(root / "Source.md", "[[Target]]")
 
-    result = node_search(query="Source", root=root, cache_path=cache, include=["outgoing_links"])
+    result = node_search(query="Source", root=root, cache_path=cache, output_mode="full", include=["outgoing_links"])
     links = result["results"][0]["outgoing_links"]
 
     assert links[0]["resolved"] is False
@@ -184,13 +184,13 @@ def test_link_state_orphan_and_unresolved_filters(tmp_path):
     write(root / "Linked.md", "[[Target]]")
     write(root / "Target.md", "target")
 
-    orphans = node_search(link_state=["orphan"], root=root, cache_path=cache, include=["incoming_links"])
+    orphans = node_search(link_state=["orphan"], root=root, cache_path=cache, output_mode="full", include=["incoming_links"])
     orphan_paths = {item["path"] for item in orphans["results"]}
     assert "Orphan.md" in orphan_paths
     assert "Linked.md" in orphan_paths
     assert "Target.md" not in orphan_paths
 
-    unresolved = node_search(link_state=["unresolved"], root=root, cache_path=cache, include=["outgoing_links"])
+    unresolved = node_search(link_state=["unresolved"], root=root, cache_path=cache, output_mode="full", include=["outgoing_links"])
     assert [item["path"] for item in unresolved["results"]] == ["Orphan.md"]
     assert unresolved["results"][0]["matched"] == ["link_state.unresolved"]
 
@@ -202,7 +202,7 @@ def test_link_state_ambiguous_and_invalid_state(tmp_path):
     write(root / "two" / "Target.md", "# Two")
     write(root / "Source.md", "[[Target]]")
 
-    ambiguous = node_search(link_state=["ambiguous"], root=root, cache_path=cache, include=["outgoing_links"])
+    ambiguous = node_search(link_state=["ambiguous"], root=root, cache_path=cache, output_mode="full", include=["outgoing_links"])
     assert [item["path"] for item in ambiguous["results"]] == ["Source.md"]
     assert ambiguous["results"][0]["matched"] == ["link_state.ambiguous"]
 
@@ -264,7 +264,7 @@ def test_cached_index_preserves_resolved_graph_without_re_resolving(tmp_path, mo
     write(root / "A.md", "[[B]] and [[Missing]]")
     write(root / "B.md", "[[A]]")
 
-    first = node_search(query="A", root=root, cache_path=cache, include=["outgoing_links", "incoming_links"], refresh=True)
+    first = node_search(query="A", root=root, cache_path=cache, output_mode="full", include=["outgoing_links", "incoming_links"], refresh=True)
     assert first["results"][0]["incoming_links"] == ["B.md"]
     assert any(link["resolved_path"] == "B.md" for link in first["results"][0]["outgoing_links"])
 
@@ -272,7 +272,7 @@ def test_cached_index_preserves_resolved_graph_without_re_resolving(tmp_path, mo
         raise AssertionError("warm cache should reuse resolved graph without _resolve_links")
 
     monkeypatch.setattr("node_index._resolve_links", explode)
-    second = node_search(query="A", root=root, cache_path=cache, include=["outgoing_links", "incoming_links"])
+    second = node_search(query="A", root=root, cache_path=cache, output_mode="full", include=["outgoing_links", "incoming_links"])
 
     assert second["stats"]["parsed"] == 0
     assert second["stats"].get("graph_reused") is True
@@ -334,3 +334,215 @@ def test_absolute_scope_inside_configured_allowed_root_selects_root(tmp_path, mo
     assert result["root"] == str(allowed.resolve())
     assert result["base"] == "vault"
     assert result["results"][0]["path"] == "vault/A.md"
+
+
+def test_compact_default_summarizes_frontmatter_and_link_counts(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", """---
+title: Alpha
+status: open
+note_type: request
+summary: Useful context
+source: private-source
+url: https://example.invalid/private
+tags: [ai, market]
+---
+[[B]] and [[Missing]]""")
+    write(root / "B.md", "# B")
+
+    result = node_search(query="Alpha", root=root, cache_path=cache)
+
+    assert result["result_schema_version"] == "node_search.compact.v1"
+    assert result["output_mode"] == "compact"
+    item = result["results"][0]
+    assert item["frontmatter_summary"]["status"] == "open"
+    assert item["frontmatter_summary"]["summary"] == "Useful context"
+    assert "source" not in item["frontmatter_summary"]
+    assert "url" not in item["frontmatter_summary"]
+    assert "frontmatter" not in item
+    assert "outgoing_links" not in item
+    assert item["links"] == {
+        "incoming_count": 0,
+        "outgoing_count": 2,
+        "resolved_count": 1,
+        "unresolved_count": 1,
+        "ambiguous_count": 0,
+    }
+    assert item["why_read"]
+
+
+def test_full_output_mode_preserves_legacy_payload(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", """---
+title: Alpha
+status: open
+---
+[[B]]""")
+    write(root / "B.md", "# B")
+
+    result = node_search(query="Alpha", root=root, cache_path=cache, output_mode="full")
+
+    assert result["result_schema_version"] == "node_search.full.v1"
+    item = result["results"][0]
+    assert item["frontmatter"]["status"] == "open"
+    assert item["outgoing_links"][0]["resolved_path"] == "B.md"
+    assert item["incoming_links"] == []
+
+
+def test_frontmatter_fields_override_preset_and_truncate_values(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", """---
+title: Alpha
+summary: "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+status: open
+---
+# A""")
+
+    result = node_search(
+        query="Alpha",
+        root=root,
+        cache_path=cache,
+        frontmatter_preset="state",
+        frontmatter_fields=["summary"],
+        max_frontmatter_value_chars=40,
+    )
+
+    item = result["results"][0]
+    assert list(item["frontmatter_summary"].keys()) == ["summary"]
+    assert item["frontmatter_summary"]["summary"].endswith("…")
+    assert item["truncated_frontmatter_fields"] == ["summary"]
+
+
+def test_link_samples_and_graph_health_summary(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", "[[B]] and [[Missing]]")
+    write(root / "B.md", "[[A]]")
+
+    result = node_search(link_state=["unresolved"], root=root, cache_path=cache, link_detail="samples", link_sample_limit=1)
+
+    assert result["graph_health_summary"]["top_unresolved_targets"] == ["Missing"]
+    links = result["results"][0]["links"]
+    assert links["outgoing_count"] == 2
+    assert len(links["outgoing_samples"]) == 1
+
+
+def test_include_empty_returns_base_only_compact(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", """---
+title: Alpha
+status: open
+---
+[[B]]""")
+    write(root / "B.md", "# B")
+
+    result = node_search(query="Alpha", root=root, cache_path=cache, include=[])
+    item = result["results"][0]
+
+    assert "frontmatter_summary" not in item
+    assert "links" not in item
+    assert "why_read" not in item
+    assert item["path"] == "A.md"
+
+
+def test_limit_truncation_reports_omitted_matches(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", "# Alpha")
+    write(root / "B.md", "# Alpha")
+    write(root / "C.md", "# Alpha")
+
+    result = node_search(query="Alpha", where=["headings"], root=root, cache_path=cache, limit=1, include=[])
+
+    assert result["count"] == 1
+    assert result["truncated"] is True
+    assert result["omitted_results_count"] == 2
+
+
+def test_response_cap_reports_omitted_results(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    for idx in range(5):
+        write(root / f"A{idx}.md", f"""---
+title: Alpha {idx}
+summary: {"x" * 300}
+---
+# Alpha""")
+
+    result = node_search(query="Alpha", root=root, cache_path=cache, limit=5, max_total_chars=2000)
+
+    assert result["response_capped"] is True
+    assert result["truncated"] is True
+    assert result["omitted_results_count"] > 0
+
+
+def test_evidence_none_and_link_detail_full(tmp_path):
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", "[[B]]")
+    write(root / "B.md", "# B")
+
+    result = node_search(query="A", root=root, cache_path=cache, link_detail="full", evidence_detail="none")
+    item = result["results"][0]
+
+    assert "why_read" not in item
+    assert item["links"]["outgoing"][0]["resolved_path"] == "B.md"
+
+
+def test_plugin_yaml_default_override_loading(tmp_path, monkeypatch):
+    import node_index
+
+    plugin_yaml = tmp_path / "plugin.yaml"
+    plugin_yaml.write_text("""defaults:
+  output:
+    frontmatter_fields: [source]
+    evidence_detail: none
+""", encoding="utf-8")
+    monkeypatch.setattr(node_index, "_PLUGIN_CONFIG_CACHE", None)
+    monkeypatch.setattr(node_index, "_plugin_yaml_path", lambda: plugin_yaml)
+    root = tmp_path / "brain"
+    cache = tmp_path / "cache.json"
+    write(root / "A.md", """---
+title: Alpha
+source: configured
+status: open
+---
+# A""")
+
+    result = node_search(query="Alpha", root=root, cache_path=cache)
+
+    assert result["frontmatter_fields_used"] == ["source"]
+    assert result["results"][0]["frontmatter_summary"] == {"source": "configured"}
+    assert "why_read" not in result["results"][0]
+
+
+def test_handler_forwards_compact_output_args(tmp_path, monkeypatch):
+    import importlib.util
+    import json
+
+    root = tmp_path / "brain"
+    monkeypatch.setenv("NODE_SEARCH_ALLOWED_ROOTS", str(root))
+    write(root / "A.md", """---
+title: Alpha
+status: open
+source: hidden
+---
+# A""")
+    spec = importlib.util.spec_from_file_location("node_search_plugin_under_test", Path(__file__).with_name("__init__.py"))
+    plugin = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(plugin)
+    data = json.loads(plugin._handler({
+        "scope": str(root),
+        "query": "Alpha",
+        "frontmatter_fields": ["source"],
+        "output_mode": "compact",
+        "limit": 1,
+    }))
+
+    assert data["success"] is True
+    assert data["results"][0]["frontmatter_summary"] == {"source": "hidden"}

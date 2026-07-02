@@ -1,6 +1,6 @@
 # Node Search 🕸️
 
-Version: `0.2.0`
+Version: `0.3.0`
 
 Hermes Agent plugin exposing `node_search`: a bounded first-pass Markdown/Obsidian metadata and link-graph candidate selector.
 
@@ -17,7 +17,9 @@ It intentionally does **not** search full Markdown bodies in v1. Use normal file
 - Explicit malformed YAML, unresolved links, orphan/no-backlink nodes, and ambiguous basename resolution.
 - Graph/link-health filters: `orphan`, `no_backlinks`, `unresolved`/`dangling`, `ambiguous`, `has_outgoing`, `has_incoming`.
 - Intent modes: `auto`, `topic_context`, `graph_health`, `metadata`, `link_neighborhood`.
-- Optional compact `why_read` evidence for triage before reading files.
+- Compact raw output by default: `frontmatter_summary`, link counts, and `why_read` evidence for triage before reading files.
+- Explicit `output_mode: "full"` legacy/raw escape hatch for debugging.
+- Configurable output defaults in `plugin.yaml` plus per-call overrides for frontmatter presets/fields, link detail, evidence, and result caps.
 - JSON cache derived from `$HERMES_HOME` or `NODE_SEARCH_CACHE`.
 - Empty broad calls fail with repair examples instead of dumping a vault.
 
@@ -63,6 +65,24 @@ Compatibility variables:
 | `NODE_SEARCH_ROOT` | empty | Legacy single-root override; prepended to allowed roots when set. |
 | `NODE_SEARCH_CACHE` | `$HERMES_HOME/.cache/hermes/node_search/index.json` | JSON index cache path. |
 
+Output defaults live in `plugin.yaml` under `defaults.output`:
+
+```yaml
+defaults:
+  output:
+    output_mode: compact
+    frontmatter_preset: default
+    frontmatter_fields: []
+    link_detail: counts
+    link_sample_limit: 5
+    evidence_detail: basic
+    max_frontmatter_value_chars: 240
+    max_chars_per_result: 2000
+    max_total_chars: 12000
+```
+
+Per-call arguments override these defaults. The `default` frontmatter preset intentionally excludes source/url-style fields; use `frontmatter_preset: "source"`, `frontmatter_preset: "all"`, or explicit `frontmatter_fields` when those are needed.
+
 Security notes:
 
 - `scope` may be relative to the selected root or absolute inside it.
@@ -81,10 +101,55 @@ Topic context:
   "query": "market radar",
   "query_regex": false,
   "where": ["path", "basename", "frontmatter", "links"],
-  "include": ["frontmatter", "incoming_links", "outgoing_links", "why_read"],
   "depth": 1,
   "expand": "both",
   "limit": 10
+}
+```
+
+Compact output is the default. It returns stable metadata like:
+
+```json
+{
+  "result_schema_version": "node_search.compact.v1",
+  "output_mode": "compact",
+  "frontmatter_preset": "default",
+  "frontmatter_fields_used": ["status", "note_type", "summary", "tags"],
+  "results": [
+    {
+      "path": "notes/example.md",
+      "title": "Example",
+      "score": 60,
+      "matched": ["basename", "frontmatter.title"],
+      "frontmatter_summary": {"status": "open", "summary": "..."},
+      "links": {"incoming_count": 1, "outgoing_count": 2, "resolved_count": 2, "unresolved_count": 0, "ambiguous_count": 0},
+      "why_read": ["matched indexed fields: basename"]
+    }
+  ]
+}
+```
+
+Full legacy/raw output for debugging:
+
+```json
+{
+  "scope": "obsidian-vault",
+  "query": "market radar",
+  "output_mode": "full",
+  "include": ["frontmatter", "incoming_links", "outgoing_links", "why_read"],
+  "limit": 3
+}
+```
+
+Custom compact metadata:
+
+```json
+{
+  "scope": "obsidian-vault",
+  "query": "client",
+  "frontmatter_fields": ["status", "client", "priority", "updated_at"],
+  "link_detail": "samples",
+  "link_sample_limit": 3
 }
 ```
 

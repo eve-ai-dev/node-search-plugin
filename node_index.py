@@ -24,6 +24,84 @@ def _split_paths(value: str) -> List[Path]:
     return [Path(part).expanduser() for part in value.split(",") if part.strip()]
 
 
+def _plugin_yaml_path() -> Path:
+    return Path(__file__).resolve().parent / "plugin.yaml"
+
+
+def _load_plugin_output_config() -> Dict[str, Any]:
+    global _PLUGIN_CONFIG_CACHE
+    if _PLUGIN_CONFIG_CACHE is not None:
+        return dict(_PLUGIN_CONFIG_CACHE)
+    config = dict(PLUGIN_DEFAULT_CONFIG)
+    try:
+        raw = yaml.safe_load(_plugin_yaml_path().read_text(encoding="utf-8")) or {}
+    except Exception:
+        raw = {}
+    if isinstance(raw, dict) and isinstance(raw.get("defaults"), dict):
+        output_defaults = raw["defaults"].get("output")
+        if isinstance(output_defaults, dict):
+            config.update(output_defaults)
+    _PLUGIN_CONFIG_CACHE = config
+    return dict(config)
+
+
+def _as_str_list(value: Any) -> List[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return [str(value).strip()]
+
+
+def _clean_enum(name: str, value: Any, allowed: Sequence[str], default: str) -> str:
+    candidate = str(value or default).strip().lower()
+    if candidate not in set(allowed):
+        raise NodeSearchError(f"{name} must be one of: {', '.join(allowed)}")
+    return candidate
+
+
+def _clean_int(name: str, value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value if value is not None else default)
+    except (TypeError, ValueError) as exc:
+        raise NodeSearchError(f"{name} must be an integer") from exc
+    return max(minimum, min(parsed, maximum))
+
+
+def _output_options(
+    *,
+    output_mode: str | None = None,
+    frontmatter_preset: str | None = None,
+    frontmatter_fields: Optional[Sequence[str]] = None,
+    link_detail: str | None = None,
+    link_sample_limit: int | None = None,
+    evidence_detail: str | None = None,
+    max_frontmatter_value_chars: int | None = None,
+    max_chars_per_result: int | None = None,
+    max_total_chars: int | None = None,
+) -> Dict[str, Any]:
+    defaults = _load_plugin_output_config()
+    opts = {
+        "output_mode": _clean_enum("output_mode", output_mode or defaults.get("output_mode"), ["compact", "full"], "compact"),
+        "frontmatter_preset": _clean_enum(
+            "frontmatter_preset",
+            frontmatter_preset or defaults.get("frontmatter_preset"),
+            ["default", "identity", "state", "routing", "source", "all"],
+            "default",
+        ),
+        "frontmatter_fields": _as_str_list(frontmatter_fields if frontmatter_fields is not None else defaults.get("frontmatter_fields")),
+        "link_detail": _clean_enum("link_detail", link_detail or defaults.get("link_detail"), ["counts", "samples", "full"], "counts"),
+        "link_sample_limit": _clean_int("link_sample_limit", link_sample_limit if link_sample_limit is not None else defaults.get("link_sample_limit"), 5, minimum=0, maximum=20),
+        "evidence_detail": _clean_enum("evidence_detail", evidence_detail or defaults.get("evidence_detail"), ["none", "basic", "expanded"], "basic"),
+        "max_frontmatter_value_chars": _clean_int("max_frontmatter_value_chars", max_frontmatter_value_chars if max_frontmatter_value_chars is not None else defaults.get("max_frontmatter_value_chars"), 240, minimum=40, maximum=1000),
+        "max_chars_per_result": _clean_int("max_chars_per_result", max_chars_per_result if max_chars_per_result is not None else defaults.get("max_chars_per_result"), 2000, minimum=500, maximum=20000),
+        "max_total_chars": _clean_int("max_total_chars", max_total_chars if max_total_chars is not None else defaults.get("max_total_chars"), 12000, minimum=2000, maximum=100000),
+    }
+    return opts
+
+
 def allowed_roots() -> List[Path]:
     """Return configured candidate roots without requiring them to exist."""
     configured = os.getenv("NODE_SEARCH_ALLOWED_ROOTS", "").strip()
@@ -93,6 +171,52 @@ MAX_FRONTMATTER_CHARS = 6000
 MAX_HEADING_CHARS = 4000
 DEFAULT_EXCLUDE_PATHS = ("/.trash/", "/.pytest_cache/", "/.hermes/", "/__pycache__/")
 _PROCESS_INDEX_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+RESULT_SCHEMA_COMPACT_V1 = "node_search.compact.v1"
+RESULT_SCHEMA_FULL_V1 = "node_search.full.v1"
+DEFAULT_FRONTMATTER_PRESETS: Dict[str, List[str]] = {
+    "identity": ["title", "aliases", "note_type", "type"],
+    "state": ["status", "priority", "approval_state", "phase", "confidence"],
+    "routing": ["tags", "owner", "domain", "client", "project_slug", "topic_id"],
+    "source": ["source", "source_refs", "url", "author", "saved_at"],
+}
+DEFAULT_FRONTMATTER_PRESETS["default"] = [
+    "status",
+    "note_type",
+    "type",
+    "summary",
+    "tags",
+    "priority",
+    "owner",
+    "domain",
+    "client",
+    "project_slug",
+    "topic_id",
+    "approval_state",
+    "phase",
+    "confidence",
+    "updated_at",
+    "updated",
+    "last_reviewed",
+    "stale_after",
+    "created_at",
+    "created",
+    "aliases",
+]
+DEFAULT_FRONTMATTER_PRESETS["all"] = []
+LEGACY_INCLUDE_FIELDS = {"frontmatter", "incoming_links", "outgoing_links"}
+COMPACT_INCLUDE_FIELDS = {"frontmatter_summary", "link_counts", "why_read", "headings", "stats"}
+PLUGIN_DEFAULT_CONFIG: Dict[str, Any] = {
+    "output_mode": "compact",
+    "frontmatter_preset": "default",
+    "frontmatter_fields": [],
+    "link_detail": "counts",
+    "link_sample_limit": 5,
+    "evidence_detail": "basic",
+    "max_frontmatter_value_chars": 240,
+    "max_chars_per_result": 2000,
+    "max_total_chars": 12000,
+}
+_PLUGIN_CONFIG_CACHE: Optional[Dict[str, Any]] = None
 EMPTY_CALL_GUIDANCE = (
     "node_search is a first-pass /brain context-gather tool, not a vault dump. "
     "Call it with scope plus a narrowing parameter. Examples: "
@@ -825,8 +949,95 @@ def _expand_results(
     return sorted(by_path.values(), key=lambda item: (-item[1], item[0].path.lower()))
 
 
-def _project_node(node: Node, score: int, matched: List[str], include: Sequence[str], mode: str = "auto") -> Dict[str, Any]:
-    include_set = set(include or ["frontmatter", "outgoing_links", "incoming_links"])
+def _truncate_value(value: Any, max_chars: int) -> Tuple[Any, bool]:
+    safe = _json_safe(value)
+    text = json.dumps(safe, ensure_ascii=False) if isinstance(safe, (dict, list)) else str(safe)
+    if len(text) <= max_chars:
+        return safe, False
+    return text[: max(0, max_chars - 1)] + "…", True
+
+
+def _frontmatter_field_order(preset: str, fields: Sequence[str]) -> List[str]:
+    if fields:
+        return list(dict.fromkeys(str(field) for field in fields if str(field).strip()))
+    if preset == "all":
+        return []
+    return list(DEFAULT_FRONTMATTER_PRESETS.get(preset, DEFAULT_FRONTMATTER_PRESETS["default"]))
+
+
+def _frontmatter_summary(node: Node, preset: str, fields: Sequence[str], max_value_chars: int) -> Tuple[Dict[str, Any], List[str], List[str], List[str]]:
+    selected = _frontmatter_field_order(preset, fields)
+    present_keys = sorted(str(key) for key in node.frontmatter.keys())
+    field_order = selected or present_keys
+    summary: Dict[str, Any] = {}
+    truncated: List[str] = []
+    for key in field_order:
+        if key not in node.frontmatter:
+            continue
+        value, was_truncated = _truncate_value(node.frontmatter[key], max_value_chars)
+        summary[key] = value
+        if was_truncated:
+            truncated.append(key)
+    return summary, field_order, present_keys, truncated
+
+
+def _link_counts(node: Node) -> Dict[str, int]:
+    resolved_count = sum(1 for link in node.outgoing_links if link.resolved)
+    ambiguous_count = sum(1 for link in node.outgoing_links if link.ambiguous)
+    unresolved_count = sum(1 for link in node.outgoing_links if not link.resolved and not link.ambiguous)
+    return {
+        "incoming_count": len(node.incoming_links),
+        "outgoing_count": len(node.outgoing_links),
+        "resolved_count": resolved_count,
+        "unresolved_count": unresolved_count,
+        "ambiguous_count": ambiguous_count,
+    }
+
+
+def _link_samples(node: Node, limit: int) -> Dict[str, Any]:
+    data: Dict[str, Any] = _link_counts(node)
+    if limit <= 0:
+        return data
+    data["incoming_samples"] = node.incoming_links[:limit]
+    data["outgoing_samples"] = [link.to_dict() for link in node.outgoing_links[:limit]]
+    return data
+
+
+def _result_json_len(data: Dict[str, Any]) -> int:
+    return len(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+
+
+def _cap_result(data: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
+    if _result_json_len(data) <= max_chars:
+        return data
+    capped = dict(data)
+    capped["result_capped"] = True
+    capped.setdefault("truncated_fields", [])
+    for result_field in ("why_read", "headings", "frontmatter_keys_present"):
+        if result_field in capped and _result_json_len(capped) > max_chars:
+            capped.pop(result_field, None)
+            capped["truncated_fields"].append(result_field)
+    if "links" in capped and _result_json_len(capped) > max_chars:
+        links = capped.get("links")
+        if isinstance(links, dict):
+            capped["links"] = {key: value for key, value in links.items() if key.endswith("_count")}
+            capped["truncated_fields"].append("links.samples")
+    if "frontmatter_summary" in capped and _result_json_len(capped) > max_chars:
+        summary = capped.get("frontmatter_summary")
+        if isinstance(summary, dict):
+            keep: Dict[str, Any] = {}
+            for key, value in summary.items():
+                keep[key] = value
+                capped["frontmatter_summary"] = keep
+                if _result_json_len(capped) > max_chars:
+                    keep.pop(key, None)
+                    break
+            capped["truncated_fields"].append("frontmatter_summary")
+    return capped
+
+
+def _project_node_full(node: Node, score: int, matched: List[str], include: Sequence[str], mode: str = "auto") -> Dict[str, Any]:
+    include_set = set(include if include is not None else ["frontmatter", "outgoing_links", "incoming_links"])
     data: Dict[str, Any] = {
         "path": node.path,
         "basename": node.basename,
@@ -853,6 +1064,99 @@ def _project_node(node: Node, score: int, matched: List[str], include: Sequence[
     return data
 
 
+def _project_node_compact(node: Node, score: int, matched: List[str], include: Optional[Sequence[str]], mode: str, output_opts: Dict[str, Any]) -> Dict[str, Any]:
+    include_set = set(include if include is not None else ["frontmatter_summary", "link_counts", "why_read"])
+    data: Dict[str, Any] = {
+        "path": node.path,
+        "basename": node.basename,
+        "title": node.title,
+        "score": score,
+        "matched": matched,
+        "frontmatter_ok": node.frontmatter_ok,
+    }
+    if node.frontmatter_error:
+        data["frontmatter_error"] = node.frontmatter_error
+    if "frontmatter_summary" in include_set:
+        summary, fields_used, present, truncated = _frontmatter_summary(
+            node,
+            output_opts["frontmatter_preset"],
+            output_opts["frontmatter_fields"],
+            output_opts["max_frontmatter_value_chars"],
+        )
+        data["frontmatter_summary"] = summary
+        data["frontmatter_keys_present"] = present
+        if truncated:
+            data["truncated_frontmatter_fields"] = truncated
+    if "headings" in include_set:
+        data["headings"] = node.headings[:20]
+    if "stats" in include_set:
+        data["size"] = node.size
+        data["mtime"] = node.mtime
+    if "link_counts" in include_set:
+        if output_opts["link_detail"] == "full":
+            data["links"] = {
+                **_link_counts(node),
+                "incoming": node.incoming_links[:MAX_LINKS_PER_NODE],
+                "outgoing": [link.to_dict() for link in node.outgoing_links[:MAX_LINKS_PER_NODE]],
+            }
+        elif output_opts["link_detail"] == "samples":
+            data["links"] = _link_samples(node, output_opts["link_sample_limit"])
+        else:
+            data["links"] = _link_counts(node)
+    if output_opts["evidence_detail"] != "none" and "why_read" in include_set:
+        data["why_read"] = _why_read(node, matched, mode)
+    return _cap_result(data, output_opts["max_chars_per_result"])
+
+
+def _project_node(node: Node, score: int, matched: List[str], include: Optional[Sequence[str]], mode: str, output_opts: Dict[str, Any]) -> Dict[str, Any]:
+    include_set = set(include or [])
+    force_legacy = bool(include_set & LEGACY_INCLUDE_FIELDS)
+    if output_opts["output_mode"] == "full" or force_legacy:
+        return _project_node_full(node, score, matched, include if include is not None else ["frontmatter", "outgoing_links", "incoming_links"], mode)
+    return _project_node_compact(node, score, matched, include, mode, output_opts)
+
+
+def _graph_health_summary(nodes: Dict[str, Node], *, limit: int = 10) -> Dict[str, Any]:
+    unresolved_targets: Dict[str, int] = {}
+    orphan_count = ambiguous_count = unresolved_node_count = has_outgoing_count = has_incoming_count = 0
+    for node in nodes.values():
+        if not node.incoming_links:
+            orphan_count += 1
+        if node.outgoing_links:
+            has_outgoing_count += 1
+        if node.incoming_links:
+            has_incoming_count += 1
+        node_has_unresolved = False
+        for link in node.outgoing_links:
+            if link.ambiguous:
+                ambiguous_count += 1
+            elif not link.resolved:
+                node_has_unresolved = True
+                if link.target:
+                    unresolved_targets[link.target] = unresolved_targets.get(link.target, 0) + 1
+        if node_has_unresolved:
+            unresolved_node_count += 1
+    top_unresolved = [target for target, _count in sorted(unresolved_targets.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]]
+    return {
+        "orphan_count": orphan_count,
+        "unresolved_node_count": unresolved_node_count,
+        "ambiguous_link_count": ambiguous_count,
+        "has_outgoing_count": has_outgoing_count,
+        "has_incoming_count": has_incoming_count,
+        "top_unresolved_targets": top_unresolved,
+    }
+
+
+def _cap_response(results: List[Dict[str, Any]], max_total_chars: int) -> Tuple[List[Dict[str, Any]], bool, int]:
+    kept: List[Dict[str, Any]] = []
+    for item in results:
+        trial = kept + [item]
+        if len(json.dumps(trial, ensure_ascii=False, separators=(",", ":"))) > max_total_chars and kept:
+            return kept, True, len(results) - len(kept)
+        kept.append(item)
+    return kept, False, 0
+
+
 def node_search(
     *,
     scope: str | None = None,
@@ -869,6 +1173,15 @@ def node_search(
     linked_from: Optional[Sequence[str]] = None,
     link_state: Optional[Sequence[str]] = None,
     include: Optional[Sequence[str]] = None,
+    output_mode: str | None = None,
+    frontmatter_preset: str | None = None,
+    frontmatter_fields: Optional[Sequence[str]] = None,
+    link_detail: str | None = None,
+    link_sample_limit: int | None = None,
+    evidence_detail: str | None = None,
+    max_frontmatter_value_chars: int | None = None,
+    max_chars_per_result: int | None = None,
+    max_total_chars: int | None = None,
     depth: int = 0,
     expand: str = "both",
     limit: int = 20,
@@ -877,6 +1190,17 @@ def node_search(
     cache_path: Path | None = None,
 ) -> Dict[str, Any]:
     mode = _normalize_mode(mode)
+    output_opts = _output_options(
+        output_mode=output_mode,
+        frontmatter_preset=frontmatter_preset,
+        frontmatter_fields=frontmatter_fields,
+        link_detail=link_detail,
+        link_sample_limit=link_sample_limit,
+        evidence_detail=evidence_detail,
+        max_frontmatter_value_chars=max_frontmatter_value_chars,
+        max_chars_per_result=max_chars_per_result,
+        max_total_chars=max_total_chars,
+    )
     if limit < 1:
         limit = 1
     limit = min(limit, MAX_RESULTS)
@@ -897,7 +1221,6 @@ def node_search(
         raise NodeSearchError("query_regex=true requires a non-empty query")
     if expand not in {"incoming", "outgoing", "both"}:
         raise NodeSearchError("expand must be one of: incoming, outgoing, both")
-    include = include or ["frontmatter", "outgoing_links", "incoming_links"]
     cache_path = Path(cache_path or default_cache()).expanduser().resolve()
     index = build_index(scope, root=root, cache_path=cache_path, refresh=refresh)
     nodes: Dict[str, Node] = index["nodes"]
@@ -923,18 +1246,35 @@ def node_search(
         query_regex=query_regex,
     )
     expanded = _expand_results(filtered[:limit], nodes, depth, expand)
-    truncated = len(expanded) > limit
-    results = [_project_node(node, score, matched, include, mode) for node, score, matched in expanded[:limit]]
-    return {
+    limit_omitted = max(0, len(filtered) - limit)
+    truncated = limit_omitted > 0 or len(expanded) > limit
+    projected = [_project_node(node, score, matched, include, mode, output_opts) for node, score, matched in expanded[:limit]]
+    results, response_capped, cap_omitted = _cap_response(projected, output_opts["max_total_chars"])
+    omitted = limit_omitted + cap_omitted
+    compact = output_opts["output_mode"] == "compact" and not (set(include or []) & LEGACY_INCLUDE_FIELDS)
+    response: Dict[str, Any] = {
         "success": True,
         "root": index["root"],
         "base": index["base"],
         "mode": mode,
+        "result_schema_version": RESULT_SCHEMA_COMPACT_V1 if compact else RESULT_SCHEMA_FULL_V1,
+        "output_mode": "compact" if compact else "full",
         "exclude_defaults": exclude_defaults,
         "exclude_path_filter": exclude_path_filter or [],
         "query": query,
         "count": len(results),
-        "truncated": truncated,
+        "truncated": truncated or response_capped,
+        "response_capped": response_capped,
         "stats": index["stats"],
         "results": results,
     }
+    if omitted:
+        response["omitted_results_count"] = omitted
+    if compact:
+        response["frontmatter_preset"] = output_opts["frontmatter_preset"]
+        response["frontmatter_fields_used"] = _frontmatter_field_order(output_opts["frontmatter_preset"], output_opts["frontmatter_fields"])
+        response["link_detail"] = output_opts["link_detail"]
+        response["evidence_detail"] = output_opts["evidence_detail"]
+    if mode == "graph_health" or link_state:
+        response["graph_health_summary"] = _graph_health_summary(seed_nodes)
+    return response

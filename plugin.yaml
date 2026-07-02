@@ -1,8 +1,19 @@
 name: node-search
-version: "0.2.0"
+version: "0.3.0"
 description: "Bounded Markdown metadata+graph prefilter for configured local roots"
 author: Adan
 requires_env: []
 provides_tools:
   - node_search
 provides_hooks: []
+defaults:
+  output:
+    output_mode: compact
+    frontmatter_preset: default
+    frontmatter_fields: []
+    link_detail: counts
+    link_sample_limit: 5
+    evidence_detail: basic
+    max_frontmatter_value_chars: 240
+    max_chars_per_result: 2000
+    max_total_chars: 12000

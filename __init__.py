@@ -1,5 +1,5 @@
 """
-node-search — Hermes plugin v0.2.0.
+node-search — Hermes plugin v0.3.0.
 Bounded Markdown metadata+graph prefilter for configured local roots.
 """
 from __future__ import annotations
@@ -20,9 +20,9 @@ except ImportError:  # Allows pytest/import smoke tests from the plugin director
 
 
 TOOL_DESCRIPTION = (
-    "node_search: configured Markdown/Obsidian context gather. Regex is the default search mode over indexed fields; use query_regex=false only when you need literal matching. "
+    "node_search: configured Markdown/Obsidian context gather. Defaults to compact_raw output: frontmatter_summary + link counts + why_read. Use output_mode='full' only for debugging/raw inspection. Regex is the default search mode over indexed fields; use query_regex=false only when you need literal matching. "
     "Indexed fields: path, basename/title/stem, frontmatter, links, headings. Not a Markdown body search. "
-    "Examples: {scope:'obsidian-vault', query:'Wild Project', where:['path','basename','frontmatter','links'], include:['why_read'], depth:1, limit:10}; "
+    "Examples: {scope:'obsidian-vault', query:'Wild Project', where:['path','basename','frontmatter','links'], depth:1, limit:10}; "
     "{scope:'obsidian-vault', query:'^(50_work|80_market)/.*(midas|wobi)', where:['path'], include:['why_read'], limit:20}; "
     "{scope:'obsidian-vault', mode:'graph_health', link_state:['orphan'], include:['incoming_links','why_read'], limit:25}. "
     "Use short literal or regex seeds; avoid long semantic-soup queries. If no results, retry once shorter/more targeted, then use search_files for exact body snippets, tables, scripts, transcripts, or non-Markdown files. "
@@ -106,8 +106,60 @@ def _schema() -> Dict[str, Any]:
                 },
                 "include": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["frontmatter", "outgoing_links", "incoming_links", "headings", "stats", "why_read"]},
-                    "description": "Choose only the evidence you need; read_file after selecting candidates.",
+                    "items": {
+                        "type": "string",
+                        "enum": ["frontmatter_summary", "link_counts", "frontmatter", "outgoing_links", "incoming_links", "headings", "stats", "why_read"],
+                    },
+                    "description": "Choose only the evidence you need; read_file after selecting candidates. Compact fields: frontmatter_summary, link_counts, why_read, headings, stats. Legacy/full fields: frontmatter, outgoing_links, incoming_links.",
+                },
+                "output_mode": {
+                    "type": "string",
+                    "enum": ["compact", "full"],
+                    "description": "Result projection. compact is default and token-bounded; full returns legacy raw frontmatter/link arrays for debugging.",
+                },
+                "frontmatter_preset": {
+                    "type": "string",
+                    "enum": ["default", "identity", "state", "routing", "source", "all"],
+                    "description": "Compact frontmatter_summary preset. default excludes noisier source/url fields; source/all are opt-in and still capped.",
+                },
+                "frontmatter_fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Explicit frontmatter_summary fields. Overrides frontmatter_preset. Only present keys are returned.",
+                },
+                "link_detail": {
+                    "type": "string",
+                    "enum": ["counts", "samples", "full"],
+                    "description": "Compact links object detail. counts is default; samples adds capped incoming/outgoing samples; full nests capped full links under links without using legacy field names.",
+                },
+                "link_sample_limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20,
+                    "description": "Sample count when link_detail=samples. Plugin YAML default is normally 5.",
+                },
+                "evidence_detail": {
+                    "type": "string",
+                    "enum": ["none", "basic", "expanded"],
+                    "description": "Controls compact evidence. basic includes why_read when requested/defaulted; none suppresses it.",
+                },
+                "max_frontmatter_value_chars": {
+                    "type": "integer",
+                    "minimum": 40,
+                    "maximum": 1000,
+                    "description": "Per-frontmatter-value cap in compact summaries.",
+                },
+                "max_chars_per_result": {
+                    "type": "integer",
+                    "minimum": 500,
+                    "maximum": 20000,
+                    "description": "Approximate JSON character cap per result; emits result_capped/truncated_fields when applied.",
+                },
+                "max_total_chars": {
+                    "type": "integer",
+                    "minimum": 2000,
+                    "maximum": 100000,
+                    "description": "Approximate JSON character cap across results; emits response_capped/omitted_results_count when applied.",
                 },
                 "depth": {
                     "type": "integer",
@@ -166,6 +218,15 @@ def _handler(args: Optional[Dict[str, Any]] = None, **kwargs: Any) -> str:
             expand=args.get("expand") or "both",
             limit=int(args.get("limit") or 20),
             refresh=bool(args.get("refresh", False)),
+            output_mode=args.get("output_mode"),
+            frontmatter_preset=args.get("frontmatter_preset"),
+            frontmatter_fields=args.get("frontmatter_fields"),
+            link_detail=args.get("link_detail"),
+            link_sample_limit=args.get("link_sample_limit"),
+            evidence_detail=args.get("evidence_detail"),
+            max_frontmatter_value_chars=args.get("max_frontmatter_value_chars"),
+            max_chars_per_result=args.get("max_chars_per_result"),
+            max_total_chars=args.get("max_total_chars"),
         )
     except NodeSearchError as exc:
         data = {"success": False, "error": str(exc), "results": []}
